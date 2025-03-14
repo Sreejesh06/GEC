@@ -147,9 +147,9 @@ const Dashboard = () => {
 
   // Memoized counts for data cards
   const criticalCounts = useMemo(() => ({
-    pressure: machineData.filter(machine => machine.pressure > 1500).length,
-    temperature: machineData.filter(machine => machine.temperature > 300).length,
-    vibration: machineData.filter(machine => machine.vibration > 7).length,
+    pressure: machineData.filter(machine => machine.pressure > 1600).length,
+    temperature: machineData.filter(machine => machine.temperature > 320).length,
+    vibration: machineData.filter(machine => machine.vibration > 8).length,
     gasFlow: machineData.filter(machine => machine.gasFlow > 3).length
   }), [machineData]);
 
