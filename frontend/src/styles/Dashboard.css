@@ -500,6 +500,11 @@ body {
   padding: 0 1rem;
 }
 
+.sort-controls {
+  display: flex;
+  gap: 15px;
+}
+
 .sort-button {
   display: flex;
   flex-direction: column;
@@ -794,4 +799,17 @@ body {
   color: var(--error);
   font-weight: 700;
   text-shadow: 0 0 5px rgba(239, 68, 68, 0.3);
+}
+
+/* Add warning state styling */
+.data-item .value.warning {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.data-item .value.warning::after {
+  content: "▲";
+  font-size: 0.7em;
+  margin-left: 3px;
+  vertical-align: super;
 }
