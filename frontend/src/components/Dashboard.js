@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { machines } from "../data/machines";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { 
   faWind, faHeartPulse, faGauge, faThermometerHalf, 
@@ -10,6 +9,7 @@ import Login from "./Login";
 import CreateAccount from "./CreateAccount";
 import ForgotPassword from "./ForgotPassword";
 import "../styles/Dashboard.css";
+import { getAllMachines, restoreMachine, login, register, startSimulation } from '../api';
 
 // Component for a data card
 const DataCard = ({ icon, count, label, iconClass }) => (
@@ -24,7 +24,7 @@ const DataCard = ({ icon, count, label, iconClass }) => (
   </div>
 );
 
-// Update the MachineCard component to check for any critical parameter
+// Update the MachineCard component
 
 const MachineCard = ({ machine, index, onRestore }) => {
   const isShutdown = machine.RUL < 20;
@@ -48,7 +48,7 @@ const MachineCard = ({ machine, index, onRestore }) => {
       isCritical || hasCriticalParameter ? "error" : 
       "good"
     }`}>
-      <div className="machine-name">{machine.name || `MACHINE ${index + 1}`}</div>
+      <div className="machine-name">MACHINE {index + 1}</div>
       {isShutdown && (
         <div className="shutdown-overlay">
           <FontAwesomeIcon icon={faExclamationCircle} className="shutdown-icon" />
@@ -65,7 +65,8 @@ const MachineCard = ({ machine, index, onRestore }) => {
           value={machine.pressure.toFixed(2)} 
           unit="psi" 
           label="Pressure" 
-          isCritical={machine.pressure > 1500} 
+          isCritical={machine.pressure > 1500}
+          isUpdated={machine._pressureChanged}
           iconClass="blue-icon" 
         />
         <DataItem 
@@ -73,7 +74,8 @@ const MachineCard = ({ machine, index, onRestore }) => {
           value={machine.temperature.toFixed(2)} 
           unit="°C" 
           label="Temperature" 
-          isCritical={machine.temperature > 300} 
+          isCritical={machine.temperature > 300}
+          isUpdated={machine._temperatureChanged}
           iconClass="yellow-icon" 
         />
         <DataItem 
@@ -81,7 +83,8 @@ const MachineCard = ({ machine, index, onRestore }) => {
           value={machine.vibration.toFixed(2)} 
           unit="Hz" 
           label="Vibration" 
-          isCritical={machine.vibration > 7} 
+          isCritical={machine.vibration > 7}
+          isUpdated={machine._vibrationChanged}
           iconClass="purple-icon" 
         />
         <DataItem 
@@ -89,16 +92,16 @@ const MachineCard = ({ machine, index, onRestore }) => {
           value={machine.gasFlow.toFixed(2)} 
           unit="kg/s" 
           label="Gas Flow" 
-          isCritical={machine.gasFlow > 3} 
+          isCritical={machine.gasFlow > 3}
+          isUpdated={machine._gasFlowChanged}
           iconClass="green-icon" 
         />
       </div>
-      <div className={`rul ${isCritical ? "blink" : ""}`}>
+      <div className={`rul ${isCritical ? "blink" : ""} ${machine._RULChanged ? "updating" : ""}`}>
         <FontAwesomeIcon icon={faHeartPulse} className="icon orange-icon" />
         <span>RUL: {machine.RUL.toFixed(2)} %</span>
         {(isCritical || hasCriticalParameter) && <FontAwesomeIcon icon={faExclamationCircle} className="alert-icon" />}
       </div>
-      {/* Add parameter alert indicator when a parameter is critical but not shutdown */}
       {!isShutdown && hasCriticalParameter && (
         <div className="parameter-alert">
           <FontAwesomeIcon icon={faExclamationCircle} className="parameter-alert-icon" />
@@ -110,28 +113,38 @@ const MachineCard = ({ machine, index, onRestore }) => {
 };
 
 // Component for a data item inside machine card
-const DataItem = ({ icon, value, unit, label, isCritical, iconClass }) => (
-  <div className="data-item">
-    {icon === "waves" ? (
-      <MdOutlineWaves className={`icon ${iconClass}`} />
-    ) : (
-      <FontAwesomeIcon icon={icon} className={`icon ${iconClass}`} />
-    )}
-    <span className={isCritical ? "critical" : ""}>
-      {value} {unit}
-    </span>
-    <div className="data-label">{label}</div>
-  </div>
-);
+const DataItem = ({ icon, value, unit, label, isCritical, isUpdated, iconClass }) => {
+  return (
+    <div className="data-item">
+      <div className="icon-container">
+        {typeof icon === "string" && icon === "waves" ? (
+          <MdOutlineWaves className={`icon ${iconClass} ${isUpdated ? "pulse" : ""}`} />
+        ) : (
+          <FontAwesomeIcon icon={icon} className={`icon ${iconClass} ${isUpdated ? "pulse" : ""}`} />
+        )}
+      </div>
+      <div className="data-content">
+        <div className={`value ${isCritical ? 'critical' : ''} ${isUpdated ? 'updating' : ''}`}>
+          {value} {unit}
+        </div>
+        <div className="label">{label}</div>
+      </div>
+    </div>
+  );
+};
 
 const Dashboard = () => {
   const [currentTime, setCurrentTime] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [view, setView] = useState("login");
   const [users, setUsers] = useState([{ username: "admin", password: "password" }]);
-  const [machineData, setMachineData] = useState(machines);
+  const [machineData, setMachineData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "dark");
   const [prioritizeCritical, setPrioritizeCritical] = useState(false);
+  const [dataUpdated, setDataUpdated] = useState(false);
+  const [simulationRunning, setSimulationRunning] = useState(false);
 
   // Apply theme effect
   useEffect(() => {
@@ -143,41 +156,93 @@ const Dashboard = () => {
     setTheme((prevTheme) => (prevTheme === "dark" ? "light" : "dark"));
   }, []);
 
-  // Update machine data at regular intervals
+  // Fetch machine data from backend
   useEffect(() => {
-    const updateData = () => {
-      const now = new Date();
-      setCurrentTime(now.toLocaleString());
-
-      setMachineData((prevData) =>
-        prevData.map((machine) => ({
-          ...machine,
-          pressure: machine.pressure + Math.random() * 10 - 5,
-          temperature: machine.temperature + Math.random() * 2 - 1,
-          vibration: machine.vibration + Math.random() * 0.5 - 0.25,
-          gasFlow: machine.gasFlow + Math.random() * 0.1 - 0.05,
-          RUL: machine.RUL - Math.random() * 0.1,
-        }))
-      );
+    const fetchMachines = async () => {
+      try {
+        const response = await getAllMachines();
+        
+        // Check if this is the first load or an update
+        if (machineData.length && response.data.length) {
+          // Highlight which parameters changed by comparing with previous data
+          const newMachines = response.data.map((machine, idx) => {
+            if (idx < machineData.length) {
+              return {
+                ...machine,
+                // Add flags for parameters that changed
+                _pressureChanged: Math.abs(machine.pressure - machineData[idx].pressure) > 0.01,
+                _temperatureChanged: Math.abs(machine.temperature - machineData[idx].temperature) > 0.01,
+                _vibrationChanged: Math.abs(machine.vibration - machineData[idx].vibration) > 0.01,
+                _gasFlowChanged: Math.abs(machine.gasFlow - machineData[idx].gasFlow) > 0.01,
+                _RULChanged: Math.abs(machine.RUL - machineData[idx].RUL) > 0.01
+              };
+            }
+            return machine;
+          });
+          
+          setMachineData(newMachines);
+        } else {
+          setMachineData(response.data);
+        }
+        
+        setLoading(false);
+        // Flash the update indicator
+        setDataUpdated(true);
+        // Update the current time to reflect the update
+        const now = new Date();
+        setCurrentTime(now.toLocaleTimeString());
+        setTimeout(() => setDataUpdated(false), 500);
+      } catch (err) {
+        console.error("Error fetching machines:", err);
+        setError("Failed to load machine data");
+        setLoading(false);
+      }
     };
 
-    const interval = setInterval(updateData, 1000);
+    fetchMachines();
+    
+    // Poll every 1 second to match the fastest parameter update
+    const interval = setInterval(fetchMachines, 1000);
+    
     return () => clearInterval(interval);
   }, []);
 
+  // Add this effect to set the current time
+  useEffect(() => {
+    // Set initial time
+    const updateTime = () => {
+      const now = new Date();
+      setCurrentTime(now.toLocaleTimeString());
+    };
+    updateTime();
+    
+    // Update time every minute
+    const timeInterval = setInterval(updateTime, 60000);
+    return () => clearInterval(timeInterval);
+  }, []);
+
   // Authentication handlers
-  const handleLogin = useCallback((username, password) => {
-    const user = users.find(user => user.username === username && user.password === password);
-    if (user) {
+  const handleLogin = useCallback(async (username, password) => {
+    try {
+      const response = await login(username, password);
+      // Store the JWT token in localStorage
+      localStorage.setItem('token', response.data.token);
       setIsAuthenticated(true);
-    } else {
+    } catch (error) {
+      console.error('Login failed:', error);
       alert("Invalid credentials");
     }
-  }, [users]);
+  }, []);
 
-  const handleCreateAccount = useCallback((username, password) => {
-    setUsers(prevUsers => [...prevUsers, { username, password }]);
-    setView("login");
+  const handleCreateAccount = useCallback(async (username, password) => {
+    try {
+      await register({ username, password });
+      setView("login");
+      alert("Account created successfully! Please log in.");
+    } catch (error) {
+      console.error("Registration failed:", error);
+      alert("Failed to create account. Username may already exist.");
+    }
   }, []);
 
   const handleLogout = useCallback(() => {
@@ -186,28 +251,24 @@ const Dashboard = () => {
   }, []);
 
   // Handler for restoring machines from shutdown
-  const handleRestoreMachine = useCallback((index) => {
-    setMachineData(prevData => {
-      const updatedData = [...prevData];
-      // Restore the machine's RUL to a safe level
-      updatedData[index] = {
-        ...updatedData[index],
-        RUL: 75 + Math.random() * 20, // Random value between 75-95%
-        // Also normalize other critical parameters
-        pressure: Math.min(updatedData[index].pressure, 1400),
-        temperature: Math.min(updatedData[index].temperature, 280),
-        vibration: Math.min(updatedData[index].vibration, 6),
-        gasFlow: Math.min(updatedData[index].gasFlow, 2.8),
-      };
-      return updatedData;
-    });
-  }, []);
+  const handleRestoreMachine = useCallback(async (index) => {
+    try {
+      const machineId = machineData[index]._id;
+      await restoreMachine(machineId);
+      
+      // Refresh the data after restoration
+      const response = await getAllMachines();
+      setMachineData(response.data);
+    } catch (err) {
+      console.error("Error restoring machine:", err);
+    }
+  }, [machineData]);
 
   // Memoized counts for data cards
   const criticalCounts = useMemo(() => ({
-    pressure: machineData.filter(machine => machine.pressure > 1600).length,
-    temperature: machineData.filter(machine => machine.temperature > 320).length,
-    vibration: machineData.filter(machine => machine.vibration > 8).length,
+    pressure: machineData.filter(machine => machine.pressure > 1500).length,
+    temperature: machineData.filter(machine => machine.temperature > 300).length,
+    vibration: machineData.filter(machine => machine.vibration > 7).length,
     gasFlow: machineData.filter(machine => machine.gasFlow > 3).length
   }), [machineData]);
 
@@ -233,6 +294,22 @@ const Dashboard = () => {
     setPrioritizeCritical(prev => !prev);
   }, []);
 
+  // Start simulation after login
+  useEffect(() => {
+    if (isAuthenticated && !simulationRunning) {
+      const startSim = async () => {
+        try {
+          await startSimulation();
+          setSimulationRunning(true);
+          console.log("Simulation started");
+        } catch (err) {
+          console.error("Error starting simulation:", err);
+        }
+      };
+      startSim();
+    }
+  }, [isAuthenticated, simulationRunning]);
+
   // Render authentication screens if not authenticated
   if (!isAuthenticated) {
     if (view === "login") {
@@ -244,6 +321,27 @@ const Dashboard = () => {
     }
   }
 
+  // Add loading and error handling in the return section
+  // Inside your return, before the main dashboard content
+  if (loading) {
+    return (
+      <div className="loading-screen">
+        <div className="loader"></div>
+        <div>Loading machine data...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="error-screen">
+        <FontAwesomeIcon icon={faExclamationCircle} className="error-icon" />
+        <div>{error}</div>
+        <button onClick={() => window.location.reload()}>Retry</button>
+      </div>
+    );
+  }
+
   return (
     <div className="dashboard">
       <header className="dashboard-header">
@@ -252,7 +350,7 @@ const Dashboard = () => {
           <FontAwesomeIcon icon={theme === "dark" ? faMoon : faSun} />
           <span>{theme === "dark" ? "Dark Mode" : "Light Mode"}</span>
         </div>
-        <div className="user-info">
+        <div className={`user-info ${dataUpdated ? 'data-updated' : ''}`}>
           <button className="user-button">
             <FontAwesomeIcon icon={faUser} className="user-icon" />
             <span className="user-name">sreejesh</span>
